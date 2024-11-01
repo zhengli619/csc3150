@@ -1,0 +1,209 @@
+\documentclass{article}
+\usepackage{graphicx, nips} % Required for inserting images
+\usepackage{listings} % To format code snippets
+
+\lstset{
+    basicstyle=\ttfamily,  % Set the font for code snippets
+    breaklines=true,       % Allow line breaks in code
+    columns=flexible       % Use flexible column width
+}
+
+\title{Assignment Report}
+\author{Zheng li - 120090155}
+
+\begin{document}
+\maketitle
+
+
+
+\section{Introduction [2']}
+
+% In the Introduction section, you are required to include a brief introduction about this assignment and your works.
+In this assignment, we will generate a dungeon containing some continuously moving gold pieces and walls. 
+At the beginning, a \texttt{"0"} representing the player will appear at the center of the dungeon. The user can control the player's movement by pressing the \texttt{WASD} keys on the keyboard. 
+If the player hits a wall, the game will end and display \texttt{"You lose the game"}. If the player collects all the gold pieces, the game will end and display \texttt{"You win the game"}. 
+If the player presses \texttt{"Q"}, the game will exit and display \texttt{"You quit the game"}.
+
+
+\section{Design [5']}
+\subsection{Map Initialization}
+Map Initialization: This part is given by the TA. It uses a data structure to store every coordinate's value in the entire 17x49 dungeon.
+
+\subsection{User Input Handling}
+User Input Handling: This part is given by the TA. The \texttt{kbhit} function is used to detect keyboard input without blocking. It checks for user input to control player movement or exit the game.
+
+\subsection{Global Variables}
+Global Variables: To track the positions of moving elements (player, walls, and gold), I defined global variables as shown below:
+
+\begin{lstlisting}
+/* Global variables */
+int player_x;           // Current x-coordinate of the player
+int player_y;           // Current y-coordinate of the player
+char map[ROW][COLUMN + 1];  // Map array, storing the current state of the game map
+
+int wall_rows[6] = {2, 4, 6, 10, 12, 14}; // Row positions of the walls
+int walls_positions[6];  // Current column positions of the walls
+
+std::map<int, bool> gold_rows;
+// Row positions and status of the gold pieces. If a certain gold piece is collected by the player, the corresponding bool becomes false.
+int gold_positions[6];  // Current column positions of the gold pieces
+
+int collected_gold = 0;  // Number of gold pieces collected by the player
+
+enum GameStatus {
+    ONGOING, 
+    WIN,      
+    LOSE,     
+    QUIT      
+};
+GameStatus game_status; // To determine the status of the game
+pthread_mutex_t mtx;    // Mutex for thread synchronization
+\end{lstlisting}
+
+\subsection{How to determine the game status}
+One of the most significant changes was replacing the \texttt{bool game\_over} variable with an enum type called \texttt{GameStatus}. 
+The new \texttt{GameStatus} enum can represent multiple game states: \texttt{ONGOING}, \texttt{WIN}, \texttt{LOSE}, and \texttt{QUIT}.
+
+This new enum provides a clear way to represent different game endings, making the code much easier to understand and maintain.
+
+The game can end in three ways: the player collects all gold pieces (\texttt{WIN}), hits a wall (\texttt{LOSE}), or the user quits (\texttt{QUIT}). 
+
+Using an enum allows me to clearly distinguish between these different end states.
+
+\subsection{Multithreading}
+I employed three threads to handle different tasks concurrently:
+
+\begin{itemize}
+    \item \textbf{Wall Thread (\texttt{wall\_thread\_f})}: Manages the movement of walls. Walls continuously move in predefined directions across the map, and each wall's position is updated in a loop.
+    
+    \item \textbf{Gold Thread (\texttt{gold\_thread\_f})}: Handles the movement of gold pieces, which shift randomly in either left or right directions using the \texttt{rand} function.
+    
+    \item \textbf{Player Thread (\texttt{player\_thread\_f})}: Manages player input and movement. This thread captures the \texttt{W}, \texttt{A}, \texttt{S}, \texttt{D} keys for movement, \texttt{Q} to quit, and checks for interactions with walls and gold pieces.
+\end{itemize}
+
+These threads are synchronized using a mutex (\texttt{pthread\_mutex\_t mtx}) to ensure safe modifications to the shared map array, avoiding race conditions.
+
+\subsection{Thread Synchronization and Game Status Management}
+The game status (\texttt{game\_status}) is used in all threads to determine whether the game should continue running or stop. Threads will continue their execution loop as long as \texttt{game\_status} is \texttt{ONGOING}. When the game ends (either by winning, losing, or quitting), the \texttt{game\_status} variable is updated, and each thread will recognize this and exit its loop accordingly.
+
+\subsection{Collision Handling}
+\textbf{Collision with Walls}: If the player hits a wall, the \texttt{game\_status} becomes \texttt{LOSE}, and the game ends with a \texttt{"You lose the game"} message.
+
+\textbf{Collision with Gold}: If the player moves to a position containing a gold piece, the piece disappears on the screen, and the \texttt{collected\_gold} counter increases. When all gold pieces are collected, \texttt{game\_status} becomes \texttt{WIN}, and the game ends with a \texttt{"You win the game"} message.
+
+\textbf{Exit}: If the player presses \texttt{Q}, \texttt{game\_status} becomes \texttt{QUIT}, and the game immediately exits with a \texttt{"You quit the game"} message.
+
+\subsection{How to find collisions}
+\textbf{Wall Collision (\texttt{if\_player\_bump\_into\_wall})}: The function checks if the player's position matches any of the wall positions. If a collision is detected, \texttt{game\_status} is updated to \texttt{LOSE}, and the message \texttt{"You lose the game"} is printed.
+
+\textbf{Gold Collision (\texttt{if\_player\_meet\_gold})}: This function checks if the player's position matches any gold piece. If it does, the corresponding gold piece is marked as collected.
+
+\subsection{Game Speed Control}
+I used \texttt{usleep} to control these intervals, adding a delay between each update for smoother movement.
+
+\subsection{Main Function Workflow}
+The main function initializes the map, sets the positions of walls and gold pieces, and starts the three threads. It waits for the player thread to finish, and finally, it cleans up by joining all threads and destroying the mutex.
+
+
+\section{Environment and Execution [2']}
+\subsection{Running Environment}
+The program was developed and tested in the following environment:
+\begin{itemize}
+    \item \textbf{Ubuntu Version}: 16.04
+    \item \textbf{Kernel Version}: 5.10.226
+    \item \textbf{GCC Version}: 5.4
+\end{itemize}
+
+\subsection{Execution Instructions}
+To compile and run the program, follow these steps:
+
+\begin{enumerate}
+    \item \textbf{Navigate to the Source Directory}: Open a terminal and navigate to the directory containing the source code (\texttt{hw2.cpp}).
+    \item \textbf{Compile the Program}: Run the following command to compile the program:
+    \begin{verbatim}
+    g++ hw2.cpp -lpthread
+    \end{verbatim}
+    The \texttt{-lpthread} flag is necessary to link the pthread library.
+    \item \textbf{Execute the Program}: After compilation, run the executable using:
+    \begin{verbatim}
+    ./a.out
+    \end{verbatim}
+\end{enumerate}
+
+\subsection{Program Output Examples}
+Here are examples of the program's output in different scenarios:
+
+\subsubsection{Example: Winning the Game}
+\begin{verbatim}
++-----------------------------------------------+
+|                                               |
+|                    ===============            |
+|                               0               |
+|            ===============                    |
+|                                               |
+|=======                                  ======|
+|                                               |
+|                                               |
+|                                               |
+|             ===============                   |
+|                                               |
+|                           ===============     |
+|                                               |
+|=====                                  ========|
+|                                               |
++-----------------------------------------------+
+You win the game
+\end{verbatim}
+
+\subsubsection{Example: Losing the Game}
+\begin{verbatim}
++-----------------------------------------------+
+|       $                                       |
+|===                                  ==========|
+|         $                                     |
+|                           ===============     |
+|                                  $            |
+|                 ===============               |
+|                                               |
+|                                               |
+|                                               |
+|          =============0=                      |
+|                                               |
+|                       ===============         |
+|    $                                          |
+|=======                                  ======|
+|                                    $          |
++-----------------------------------------------+
+You lose the game
+\end{verbatim}
+
+\subsubsection{Example: Quitting the Game}
+\begin{verbatim}
++-----------------------------------------------+
+|                     $                         |
+|============                                  =|
+|              $                                |
+|                                 ==============|
+|                      $                        |
+|=                                  ============|
+|                                               |
+|                       0                       |
+|                                               |
+|=========                                  ====|
+|            $                                  |
+|=======                                  ======|
+|    $                                          |
+|       ===============                         |
+|                $                              |
+You quit the game
+\end{verbatim}
+
+
+\section{Conclusion [2']}
+I have learned a series of pthread operations such as \texttt{pthread\_create}, \texttt{pthread\_exit}, \texttt{pthread\_join}, \texttt{pthread\_mutex}, and \texttt{pthread\_condition}.
+I learned what multithread programming is and how to avoid race conditions using mutexes and conditions.
+I learned terminal control such as how to clear the screen and how to control the cursor using \texttt{printf}.
+I learned how to generate a random number and use \texttt{srand} to generate different \texttt{rand} values.
+I learned how to suspend a thread using \texttt{usleep()} or \texttt{sleep()}.
+
+\end{document}
