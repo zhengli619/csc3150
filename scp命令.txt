@@ -1,0 +1,1 @@
+scp -r -P 2222 -i "C:/Users/admin/.vagrant.d/boxes/cyzhu-VAGRANTSLASH-csc3150/0.2.0/virtualbox/vagrant_private_key" C:\csc3150\assignment2 vagrant@127.0.0.1:/home/vagrant/csc3150
