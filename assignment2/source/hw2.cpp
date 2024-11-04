@@ -24,6 +24,30 @@ int player_x;  // Current x-coordinate of the player
 int player_y;  // Current y-coordinate of the player
 char map[ROW][COLUMN + 1];  // Map array, storing the current state of the game map
 
+// 在代码中定义char map[ROW][COLUMN + 1]时，使用了COLUMN + 1而不是COLUMN，其原因主要是为了在每一行的末尾添加一个额外的字符位置，以存储字符串结束符 \0，
+// 从而确保每一行的字符数组可以被正确地当作字符串处理。
+
+// 具体原因如下：
+// 字符串的结尾标识：在 C 语言中，字符串需要以 \0（null 终止符）结尾，才能被 puts()、printf() 等字符串处理函数正确识别和显示。
+// 代码中的 map_print() 函数使用 puts(map[i]) 来逐行显示地图内容。puts()函数会读取字符串直到 \0为止。因此，确保每一行都以 \0结尾可以让 puts() 准确地按行输出地图。
+
+// 在 C 语言中，如果直接用字符串字面量（例如 "helloworld"）来定义字符串，编译器会自动在末尾添加 \0 作为字符串的终止符，因此你不需要手动添加 \0。
+// 例如：char str[] = "helloworld";
+// 如果定义一个字符数组后逐个字符赋值，如 char str[11] = {'h', 'e', 'l', 'l', 'o', 'w', 'o', 'r', 'l', 'd', '\0'};，则需要手动添加 \0。
+
+// 对于字符串操作函数，如 puts()、printf()，它们会一直读取字符直到遇到 \0。没有 \0 会导致读取超出预期范围，可能输出其他内存中的内容，甚至导致程序崩溃。
+
+//C++ 的 std::string 类更加强大且易于使用，不需要手动处理字符串大小，也自动管理字符串终止符。因此，使用 std::string 更符合现代 C++ 编程习惯。例如：
+//#include <iostream>
+//#include <string>
+//int main() {
+//     std::string str = "helloworld";  // 使用 std::string 定义字符串
+//     std::cout << str << std::endl;   // 直接输出字符串
+//     return 0;
+// }
+
+
+
 int wall_rows[6] = {2, 4, 6, 10, 12, 14}; // Row positions of the walls
 int walls_positions[6];  // Current column positions of the walls
 
