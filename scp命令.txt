@@ -1,0 +1,2 @@
+第二次作业：scp -r -P 2222 -i "C:/Users/admin/.vagrant.d/boxes/cyzhu-VAGRANTSLASH-csc3150/0.2.0/virtualbox/vagrant_private_key" C:\csc3150\assignment2 vagrant@127.0.0.1:/home/vagrant/csc3150
+第四次作业： scp -P 2200 -r C:\csc3150\assignment4\A4-FileSys-template csc3150@127.0.0.1:/home/csc3150/csc3150-project4

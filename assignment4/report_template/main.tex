@@ -1,0 +1,137 @@
+\documentclass{article}
+\usepackage{graphicx, nips} % Required for inserting images
+
+\title{Assignment Report: Title}
+\author{Zheng li - 120090155}
+
+\begin{document}
+\maketitle
+
+
+
+\textbf{No page limitation}
+
+\section{Introduction [2']}
+
+This assignment uses xv6, a simple and Unix-like teaching operating system, as the platform to implement: 
+1. the function  bmap with double and triple indirect blcoks 
+2. the function  itrunc with double and triple indirect blocks
+3. the function  sys_symlink which is called behind the symlink(target, path) system call, to create a new symbolic link file at the path refers to target.
+4. modification  sys_open in order to support opening a symbolic link file. If the linked file is also a symbolic link, recursively follow it until a non-link file is
+reached or rerturn -1 to indicate that the depth of links reaches some threshold.
+
+\section{Design [5']}
+
+the prework: the macro and data structure in file.h and fs.h doesn't support double and triple indirect blocks, 
+so I create similar files which are file_ec.h and fs_ec.h with macro and struct dinode and struct inode changed to support double and triple indirect blocks in fs_ec.c.
+to be specific:The first 10 elements of ip->addrs[] should be direct blocks.The 11th element should be a singly-indirect block.The 12th element should be a doubly-indirect block.The 13th element should be triple-indirect block. 
+(256*256*256 + 256*256+256+10 ≈ 1.6million+ blocks).
+
+for the 1.the function bmap with double and triple indirect blcoks:
+I implement the bmap supporting double indirect blocks in fs.c and I implement the bmap supporting both double and triple indirect blocks in fs_ec.c.
+I pick the design in fs_ec.c to be illustrated because it includes all the implementation of both double and triple indirect blocks.
+My data structure: my data structure is a hierarchical block-based file system that utilizes multiple levels of indirect blocks (single, double, and triple) to manage large files. 
+Direct entry: The first 10 entries (ip->addrs[0] to ip->addrs[9]) are direct entry. Each directly points to a data block (Layer 0).
+Single Indirect entry: The 11th entry (ip->addrs[10]) is a single indirect entry, points to a block holding 256 direct enrty(layer1), each direct entry points to a data block, forming a entirety of 256 data blocks(layer0)
+double indirect entry: the 12th entry (ip->addrs[11]) is a double indirect entry, points to a block holding 256 single indirect entry(layer2), each indirect entry points to a block, forming a entriety of 256 blocks(layer1), each direct entry in each layer1 block points to a data block, forming a entirety of 256*256 data blocks(layer0)
+tripe  indirect entry: the 13th entry (ip->addrs[12]) is a triple indirect entry, points to a block holding 256 double indirect entry(layer3), each double indirect entry points to a block, forming a entriety of 256 blocks(layer2), each single indirect entry in each layer2 block points to a block, forming a entirety of 256*256 blocks(layer1), each direct entry in each layer1 block points to a data block, forming a entirety of 256*256*256 data blocks(layer0)
+insight: take triple as example, the data structure is like a tree rooted from the ip->addrs[12]!
+Steps of bmap Function: bmap maps a logical block number bn (a block within the file) to the physical address of a block on disk. It handles allocation when necessary by calling balloc to allocate new blocks if they are not yet allocated.
+1. Direct Blocks Handling: if bn < NDIRECT, the function directly uses the addrs[] array in the inode (ip->addrs[bn]) to point to a data block. If inside the entry is 0 (i.e., the data block has not been allocated yet), it calls balloc to allocate a layer0 block, i.e, a data block and rerturn the address of data block.
+2. Single Indirect Block Handling: if NDIRECT < bn < NDIRECT+NINDIRECT, the function uses the single indirect entry, The 11th entry (ip->addrs[10]). If inside the entry is 0, it calls balloc to allocate a layer1 block. Then retrieve the related entry of bn in this block, if inside the entry is 0, it calls balloc to allocate a layer0 block, i.e, data block and return the address of data block.
+3. double indirect block handling: if NDIRECT+NINDIRECT < bn < NDIRECT+NINDIRECT+DNIDIRECT, the function uses the double indirect entry, The 12th entry (ip->addrs[11]). If inside the entry is 0, it calls balloc to allocate a layer2 block. Then retrieve the related entry of bn in this block, if inside the entry is 0, it calls balloc to allocate a layer1 block. Then retrieve the related entry of bn in this block, if inside the entry is 0, it calls balloc to allocate a layer0 block, i.e, data block and return the address of data block.
+4. triple indirect block handling: if NDIRECT+NINDIRECT+DNINDIRECT < bn < NDIRECT+NINDIRECT+DNIDIRECT+TNINDIRECT, the function uses the triple indirect entry, The 13th entry (ip->addrs[12]). If inside the entry is 0, it calls balloc to allocate a layer3 block. Then retrieve the related entry of bn in this block, if inside the entry is 0, it calls balloc to allocate a layer2 block. Then retrieve the related entry of bn in this block, if inside the entry is 0, it calls balloc to allocate a layer1 block, Then retrieve the related entry of bn in this block, if inside the entry is 0, it calls balloc to allocate a layer0 block, i.e, data block and return the address of data block
+
+for the 2.the function itrunc with double and triple indirect blcoks:
+I implement the itrunc supporting double indirect blocks in fs.c and I implement the itrunc supporting both double and triple indirect blocks in fs_ec.c.
+I pick the design in fs_ec.c to be illustrated because it includes all the implementation of both double and triple indirect blocks.
+steps of itrunc Function: itrunc frees the data blocks associated with the inode.It goes through all levels of the file system's block structure (direct, single indirect, double indirect, and triple indirect) and deallocates any blocks that the inode references.
+1. Direct Blocks Handling:  For ip->addrs[0] to ip->addrs[9] (direct entries).  If a direct block is allocated, it calls bfree(ip->dev, ip->addrs[i]) to free the block, then sets ip->addrs[i] = 0.
+2. Single Indirect Block/double indirect block handling/triple indirect block Handling: they are corresponding to ip->addrs[10] to ip->addr-[12]. Their logic is similar, so I just pick triple indirect handling to illustrate.
+ the bfree step is first free the three-layer left bottom tree(root is a entry of a layer 2 block), then free a one-layer large tree, then to the whole tree.
+
+for the 3.the function sys_symlink
+The sys_symlink() function is a system call that creates a symbolic link in a filesystem. Here's an explanation of its design and flow:
+1.Input Parameters (Arguments)
+This function does not directly take arguments in its parameter list, but it retrieves them through the argstr() function calls.
+Target: The first argument represents the target of the symbolic link (the destination file or directory).
+Path: The second argument represents the path where the symbolic link will be created
+2.Argument Validation
+After fetching the arguments, the function checks if either of the arguments is invalid:
+if (argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+If either argument cannot be fetched properly, the function returns -1, indicating failure. This prevents further execution with invalid or undefined parameters.
+3. Begin File Operation
+The begin_op() function is called to start the transaction, signaling that a filesystem operation is about to take place.
+4. Check If the Path Already Exists
+The function checks whether a file already exists at the given path (path) by calling namei(path).
+If a file exists at the path, namei() will return a non-zero pointer (ip), indicating the file was found. If a file exists, Calls end_op() to finish the transaction. Returns -1 because you cannot create a symbolic link at an existing path 
+5.Create the Symbolic Link
+If no existing file is found, the function proceeds to create a new symbolic link at the provided path. It does so by calling the create() function:The create() function attempts to create a new file (in this case, a symbolic link, represented by the type T_SYMLINK).
+If the creation fails, ip will be 0, Calls end_op() to finish the transaction. Returns -1 because the symbolic link could not be created.
+6. Write the Target Path into the Symbolic Link
+Once the symbolic link inode is created, the target path (i.e., the file or directory being linked to) is written into the new symbolic link file:if (writei(ip, 0, (uint64)target, 0, MAXPATH) < MAXPATH)
+The writei() function writes the target string into the symbolic link inode ip.If the number of bytes written is less than MAXPATH, it indicates an error occurred during the write operation. If so, the function:
+Unlocks the inode (iunlock(ip)).Decrements the reference count of the inode (iput(ip)).Calls end_op() to end the transaction.Returns -1 to indicate failure.
+7. Final Cleanup and End Operation
+If the write operation is successful, the function:Unlocks the inode (iunlock(ip)).Decrements the reference count of the inode (iput(ip)).Calls end_op() to finalize the filesystem operation.
+Finally, the function returns 0, indicating that the symbolic link was successfully created.
+
+
+for the 4.modification sys_open
+the part I modified within the loop structure:if (ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0){}. 
+1.checking whether the inode ip is a symbolic link (T_SYMLINK) and if the O_NOFOLLOW flag is not set in the file open mode (omode)
+2.Depth Limit for Symbolic Link Traversal
+To prevent infinite loops due to circular symbolic links (where a symlink points to another symlink that eventually points back to itself), a depth limit is set:
+int depth = 10;  // Set depth 
+3.Traverse Symbolic Links (Main Loop)
+The main part of the code is a loop that attempts to follow symbolic links up to the specified depth (depth = 10):for(int i = 0; i < depth; i++) {}
+Inside the loop, each iteration represents one level of symbolic link traversal. The process is as follows:
+4. Reading the Target of the Symbolic Link
+Inside the loop, the function reads the target of the symbolic link (i.e., the file the symbolic link points to):
+memset(destination, 0, MAXPATH): Clears the destination buffer (which will hold the path to the target of the symlink) to ensure there is no leftover data.
+readi(ip, 0, (uint64)destination, 0, MAXPATH): Reads the target path from the symbolic link inode ip into the destination buffer(not buffer cache, just kernel buffer). It uses readi() to read MAXPATH bytes from the inode. If readi() does not return MAXPATH bytes (i.e., if the read fails or the length of the target path is not correct), the function returns -1, indicating an error.
+5. Unlock Current Inode
+After reading the target path, the function unlocks and releases the current inode (ip) because it’s about to switch to a new inode.This ensures that the current inode is not locked while the function switches to the new target inode.
+6.The next step is to resolve the target path stored in destination:if((ip = namei(destination)) == 0)
+namei(destination): This function searches the filesystem for the file or directory specified by destination and returns the corresponding inode (ip). If namei() returns 0, it means the target does not exist or there is an error in resolving the path, and the function returns -1.
+7. Lock the New Inode
+If the target path is successfully resolved and a new inode is found, the function locks the new inode (ip) to perform further operations on it:
+8. Handling the new Inode
+Once the new inode is locked, the function checks if it is still a symbolic link:If the new inode is not a symbolic link, it breaks out of the loop, as further traversal is unnecessary. This means the function has reached the final target (a regular file, directory, etc.), and no further symbolic link resolution is needed.
+9. Depth Limit Exceeded
+If the loop reaches the maximum depth (10), meaning that there are too many symbolic links, the function will stop and it releases the current inode (ip), calls end_op() to complete the filesystem operation, and returns -1, indicating an error.
+10. Reference Count Update
+If everything works fine and no errors occur, the function increments the reference count of the final inode (ip) because the current thread is holding this inode.
+
+
+
+
+
+
+
+\section{Environment and Execution [2']}
+
+In the Environment and Execution section, you are required to include what is your program's running environment, how to execute your program, and use appropriate ways to show your program runs well.
+This assignment uses xv6, a simple and Unix-like teaching operating system.You can test the correctness of your code using the following commands under '~/xv6-labs-2022'directory.
+To run part1 part2, use the following command:
+make clean
+make qemu
+bigfile
+
+
+to run the bonus part, replace the file.h fs.c fs.h by file_ec.h  fs_ec.h  fs_ec.c and change their name to file.h fs.c fs.h. then run the same command.
+To run part3 and part4, use the following command:
+make clean
+make qemu
+symlinktest
+
+
+
+
+
+\section{Conclusion [2']}
+
+In the Conclusion section, you are required to include a brief summary about this assignment and what you have learned from this assignment.
+
+
+\end{document}

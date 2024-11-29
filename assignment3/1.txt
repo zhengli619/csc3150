@@ -1,0 +1,434 @@
+Your assignment involves implementing the mmap and munmap system calls in xv6, a teaching OS that resembles Unix. Here’s a summary to help guide your work:
+
+Overview:
+
+mmap maps files into process memory, enabling file regions to appear as parts of the virtual memory space.
+munmap undoes this mapping.
+Assignment Goals:
+
+Implement mmap and munmap in specific files (proc.c, proc.h, sysfile.c, trap.c).
+Only modify sections marked with TODO.
+Test your implementation using mmaptest after compiling xv6 with make qemu.
+System Call Requirements:
+
+mmap: Create memory mappings and handle page faults when accessing mapped memory for the first time.
+munmap: Remove mappings and optionally write back changes for shared maps.
+Technical Specifications:
+
+Define a VMA struct to track virtual memory areas.
+Handle page faults by mapping pages on demand.
+Ensure correct permissions and alignment of virtual addresses.
+Optional: Implement fork() handling to maintain mappings in child processes.
+Grading:
+
+Code is 90% of the grade, broken down into specific functionality (e.g., read/write permissions, handling two files).
+Report is 10%, following a provided LaTeX template.
+Let me know if you need help on any part!
+
+
+
+
+
+
+您说：
+void *mmap(void *addr, size_t length, int prot, int flags,  int fd, off_t offset);
+addr: the start address of the mapped region; 0 if the user leave it to kernel to then the kernel chooses the page-aligned address (always 0 in this assignment). length: how many bytes of the file to map. prot: the desired memory protection of the mapping (and must not conflict with the open mode of the file). flags: determines whether updates to the mapping are carried through to the underlying file. fd: the file descriptor offset: the starting offset in the file
+Introduction-Example usage: char *p = mmap(0, PGSIZE*2, PROT_READ, MAP_PRIVATE, fd, 0);
+0: kernel will choose the page-aligned address for the user PROT_READ indicates that the mapped memory should be read-only, i.e., modification is not allowed. MAP_PRIVATE indicates that if the process modifies the mapped memory, the modification should not be written back to the file (of course, due to PROT_READ, updates are prohibited in this case).  
+To ensure the function of mmap, you should complete the function sys_mmap in sysfile.c and the VMA (Virtual Memory Area) struct definition in proc.h 
+Virtual Memory Area: used by the kernel to track the mapping area. Each VMA represents a contiguous region of virtual memory that has the same permissions and is backed by the same kind of object. The operating system needs to keep track of these mappings, including where they start, how large they are, what permissions they have, and what file or device they're associated with.    
+Implementation-VMA：
+Define a structure to record the address, length, permissions, file, etc. for a virtual memory range created by mmap.
+Look at the parameters of mmap() to see what should be recorded in the VMA.
+You may add other fields to VMA struct if you later find that they are useful.
+This is my implementation in proc.h:
+
+struct vma {
+  uint64 addr;           // 起始虚拟地址
+  uint64 length;         // 映射的长度（字节数）
+  int prot;              // 访问权限（如 PROT_READ、PROT_WRITE、PROT_EXEC 的组合）
+  int flags;             // 映射标志（如 MAP_SHARED 或 MAP_PRIVATE）
+  struct file *file;     // 指向映射的文件
+  int fd;                // 文件描述符
+  uint64 offset;         // 文件中起始偏移量
+  uint64 used;              // 是否有效（1 表示此 VMA 有效，0 表示空闲）
+};
+
+// Per-process state
+struct proc {
+  struct spinlock lock;
+
+  // p->lock must be held when using these:
+  enum procstate state;        // Process state
+  void *chan;                  // If non-zero, sleeping on chan
+  int killed;                  // If non-zero, have been killed
+  int xstate;                  // Exit status to be returned to parent's wait
+  int pid;                     // Process ID
+
+  // wait_lock must be held when using this:
+  struct proc *parent;         // Parent process
+
+  // these are private to the process, so p->lock need not be held.
+  uint64 kstack;               // Virtual address of kernel stack
+  uint64 sz;                   // Size of process memory (bytes)
+  pagetable_t pagetable;       // User page table
+  struct trapframe *trapframe; // data page for trampoline.S
+  struct context context;      // swtch() here to run process
+  struct file *ofile[NOFILE];  // Open files
+  struct inode *cwd;           // Current directory
+  char name[16];               // Process name (debugging)
+  struct vma vma[VMASIZE];     // virtual mem area
+};
+
+Implementation of sys_mmap：
+1. Fetch the arguments and check if they are valid from the user call.
+2. Search for an available VMA in the current process and record the map information.
+3. Increase the file duplicate.
+Here is my implementation:
+// TODO: complete mmap()
+uint64
+sys_mmap(void)
+{
+  
+  uint64 addr;
+  uint64 length;
+  int prot;
+  int flags;
+  int fd;
+  struct file *f;
+  uint64 offset;
+
+  argaddr(0, &addr);         
+  argaddr(1, &length);  
+  argint(2, &prot);           
+  argint(3, &flags);          
+  argfd(4, &fd, &f);          
+  argaddr(5, &offset);       
+
+  //check parameter valid
+  if (length <= 0) {
+    return -1; 
+  }
+
+  if (prot <= 0) {
+    return -1;
+  }
+
+  if (flags <= 0) {
+    return -1; 
+  }
+
+  if (argfd(4, &fd, &f) < 0) {
+    return -1; 
+  }
+
+  if (offset < 0 || offset%PGSIZE) {
+    return -1; 
+  }
+
+  if ((flags & MAP_PRIVATE) && (flags & MAP_SHARED)) {
+    return -1; // MAP_PRIVATE conflict MAP_SHARED 
+  }
+
+  if ((prot & PROT_NONE) && (prot & (PROT_READ | PROT_WRITE | PROT_EXEC))) {
+    return -1; // PROT_NONE can not exist when others exist
+  }
+
+  if ((prot & PROT_READ) && !f->readable) {
+    return -1; // request read on a unreadable file
+  }
+
+
+  // if map_shared, be careful there is no conflict
+  if (!f->writable && (prot & PROT_WRITE) && flags==MAP_SHARED){
+    return -1;
+  }
+
+  length= PGROUNDUP(length); // PAGE-ALIGNED length
+  
+  struct proc *p = myproc(); // get current process information
+
+  struct vma *vma = 0;    // initiallize vma
+
+  if(p->sz+length > MAXVA){
+    return -1;  // the requested length by user mmap() is too large after page-aligned
+  }
+
+  
+  // traverse VMA, find free one
+  for (int i=0; i<VMASIZE; i++) {
+      if (p->vma[i].used == 0) { 
+          vma = &p->vma[i];
+          
+          break;
+      }
+  }
+
+
+  // if there is no free vma , error
+  if (vma == (void *)0) {
+      panic("sys_mmap: no available VMA");
+  }
+ 
+  // record map information to VMA
+  p ->sz= PGROUNDUP(p ->sz); // PAGE-ALIGNED 
+  vma->addr = p->sz;
+  vma->length = length;
+  vma->prot = prot;
+  vma->flags = flags;
+  vma->file = f;
+  vma->offset = offset;
+  vma->fd = fd;        
+  vma->used = 1;       // mark it used
+  p->sz += length;
+
+  // add ref number
+  filedup(f);
+
+  return vma->addr;
+}
+
+
+Finish? No file content in the memory!It seems that we just record the meta data in the VMA, but there is no actual data in the memory!When the application accesses this memory, the kernel loads the actual data through a page fault exception. This step is also called lazy loading.Add code to cause a page-fault in a mmap-ed region to allocate a page of physical memory.
+
+
+Implementation of page-fault:
+Find corresponding valid vma by fault address.
+Read 4096 bytes of the relevant file onto that page, and map it into the user address space.
+Read the file with readi, which takes an offset argument at which to read in the file (but you
+will have to lock/unlock the inode passed to readi).
+Set the permissions correctly on the page.
+
+Hint:
+Please trace the code of mapfile, mappages and kalloc. The swapping mechanism is not supported in the xv6 system. If the physical memory is filled,
+you are expected to kill the process. (You shall learn to use kalloc() and setkilled()
+functions) If there is spare space in physical memory, map one page of the file with the corresponding vma. ( mapfile() and mappages() ) 
+// file.c
+// read a page of file to address mem
+// The off parameter in the mapfile and readi represents the offset
+// from the start of the file where the read operation should begin.
+void mapfile(struct file * f, char * mem, int offset){
+// printf("off %d\n", offset);
+ilock(f->ip);
+readi(f->ip, 0, (uint64) mem, offset, PGSIZE);
+iunlock(f->ip);
+}
+// vm.c
+// Create PTEs for virtual addresses starting at va that refer to
+// physical addresses starting at pa. va and size might not
+// be page-aligned. Returns 0 on success, -1 if walk() couldn't
+// allocate a needed page-table page.
+int mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int
+perm)
+{
+uint64 a, last;
+pte_t *pte;
+if(size == 0)
+panic("mappages: size");
+a = PGROUNDDOWN(va);
+last = PGROUNDDOWN(va + size - 1);
+for(;;){
+if((pte = walk(pagetable, a, 1)) == 0)
+return -1;
+if(*pte & PTE_V)
+panic("mappages: remap");
+*pte = PA2PTE(pa) | perm | PTE_V;
+if(a == last)
+break;
+a += PGSIZE;
+pa += PGSIZE;
+}
+return 0;
+}
+
+Here is my implementation in trap.c:
+// TODO: page fault handling
+  else if(r_scause() == 13 || r_scause() == 15) {
+    // uint64 va = r_stval();
+    // printf("Now, after mmap, we get a page fault\n");
+    uint64 va = r_stval();  // 获取导致异常的虚拟地址
+    struct vma* vma = 0;
+    // 1. find valid vma
+    for (int i = 0; i < VMASIZE; i++) {
+        if (p->vma[i].used && va >= p->vma[i].addr && va < p->vma[i].addr + p->vma[i].length) {
+            vma = &p->vma[i];
+            break;
+        }
+    }
+
+    if (!vma) {
+        // if not find vma ,error
+        goto err;
+    }
+
+    
+    char* mem = kalloc(); // allocate physical memory
+    if (mem == 0) {
+        // kill
+        goto err;
+    }
+
+    memset(mem, 0, PGSIZE); // 
+    int offset = va - vma->addr + vma->offset;  // calculate offset
+    mapfile(vma->file, mem, offset); // read data from disk to physical memory
+    // set permission
+    int flags = PTE_U; 
+    if (vma->prot & PROT_READ) {
+      flags |= PTE_R;  
+    }
+    if (vma->prot & PROT_WRITE) {
+      flags |= PTE_W; 
+    }
+    if (vma->prot & PROT_EXEC) {
+      flags |= PTE_X;  
+    }
+
+    // set pte of pagetable from va to mem
+    if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, flags) == -1) {
+        // if failed, free the memory
+        kfree(mem); //avoid memory leak
+        goto err;
+    }
+
+  }
+
+Here is some helper function you may wonder what they look like:
+
+// Supervisor Trap Cause
+static inline uint64
+r_scause()
+{
+uint64 x;
+asm volatile("csrr %0, scause" : "=r" (x) );
+return x;
+}
+
+// Supervisor Trap Value
+static inline uint64
+r_stval()
+{
+uint64 x;
+asm volatile("csrr %0, stval" : "=r" (x) );
+return x;
+}
+
+Impementation of sys_munmap():
+find the VMA for the address range and unmap the specified pages (hint: use uvmunmap).
+If munmap removes all pages of a previous mmap, it should decrease the reference count of the corresponding struct file.
+If an unmapped page has been modified and the file is mapped MAP_SHARED, write the page back to the file. Look at filewrite for inspiration.
+Ideally your implementation would only write back MAP_SHARED pages that the program actually modified. The dirty bit (D) in the RISC-V PTE indicates whether a pagehas been written. However, mmaptest does not check that non-dirty pages are not written back; thus, you can get away with writing pages back without looking at D bits.
+Hint：void
+uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
+{
+  uint64 a;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("uvmunmap: not aligned");
+
+  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    if((pte = walk(pagetable, a, 0)) == 0)
+      panic("uvmunmap: walk");
+    if((*pte & PTE_V) == 0) {
+        // if (do_free == -1)
+          continue;
+        // else
+        //   panic("uvmunmap: not mapped");
+      }
+    if(PTE_FLAGS(*pte) == PTE_V)
+      panic("uvmunmap: not a leaf");
+    if(do_free){
+      uint64 pa = PTE2PA(*pte);
+      kfree((void*)pa);
+    }
+    *pte = 0;
+  }
+}
+My implementation of  sys_munmap():
+// TODOm: complete munmap()
+uint64
+sys_munmap(void)
+{
+  
+  uint64 addr;   
+  uint64 length; 
+  struct vma * vma = 0 ; 
+  struct proc *p = myproc(); 
+  
+
+ 
+  argaddr(0, &addr);
+  argaddr(1, &length);
+ 
+  /* argument verification */
+  if (addr < 0 || length < 0){
+    return -1;
+  }
+
+
+  for (int i = 0; i < VMASIZE ; i++){
+    if (p->vma[i].used && addr >= p->vma[i].addr && addr+length <= p->vma[i].addr + p->vma[i].length) {
+        // the address is in between the vma
+        vma = &(p->vma[i]);
+        
+        break;
+    }
+  }
+
+  if(!vma) return -1;
+
+ 
+  // find the vma
+  if ((vma->flags & MAP_SHARED) != 0){
+    // write back if the map is shared
+    filewrite(vma->file, addr, length);
+    }
+  // unmap 
+  uvmunmap(p->pagetable, addr, length / PGSIZE, 1);
+  // update the address since some this is 
+  vma->addr += length;
+  vma->length -= length;
+  // close the file  if all the space of vma is unmaped 
+  if (vma->length ==0){
+    fileclose(vma->file); // close the file
+  }
+  return 0;
+}
+The last step: page alignment : I use a lot of PGROUNDUP(sz) whcih is (((sz)+PGSIZE-1) & ~(PGSIZE-1)) and PGROUNDDOWN(a) which is (((a)) & ~(PGSIZE-1)) to meet the requirement of page alignment in My impletation
+How to test? :After make qemu, run mmaptest.
+
+
+So far I have finished all my assignment3, so can you help me write a latex file, and I will give you the format:
+\documentclass{article}
+\usepackage{graphicx, nips} % Required for inserting images
+
+\title{Assignment Report: Title}
+\author{Name - Student ID}
+
+\begin{document}
+\maketitle
+
+
+Your report should follow the template with the following section structure.
+
+\textbf{No page limitation}
+
+\section{Introduction [2']}
+
+In the Introduction section, you are required to include a brief introduction about this asignment and your works.
+
+
+\section{Design [5']}
+
+In the Design section, you are required to include how you design your program.
+
+\section{Environment and Execution [2']}
+
+In the Environment and Execution section, you are required to include what is your program's running environment, how to execute your program, and use appropriate ways to show your program runs well.
+
+\section{Conclusion [2']}
+
+In the Conclusion section, you are required to include a brief summary about this assignment and what you have learned from this assignment.
+
+
+\end{document}

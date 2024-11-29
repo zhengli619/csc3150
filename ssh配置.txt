@@ -1,0 +1,9 @@
+启动xv6这个vm后，如果vscode连不上xv6这个虚拟机，在virtual box终端使用如下命令：
+ip addr
+sudo ip link set enp0s17 up   #Bring Up the Interface:
+sudo dhclient enp0s17 #This will request an IP address from the VirtualBox network.
+Run ip addr again to check if enp0s17 has an IP address. Look for something like inet 192.168.x.x.
+
+可以先在cmd中试一下：
+ssh -p 2200 csc3150@127.0.0.1
+行的话exit退出，vscode上连接它
